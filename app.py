@@ -1,6 +1,8 @@
 import streamlit as st
 import pandas as pd
-from utils.data_loader import load_deals, STAGES, STAGE_COLORS, STAGE_BG
+import json
+import requests
+from pathlib import Path
 
 # ── Configuración de página ──────────────────────────────────────────
 st.set_page_config(
@@ -10,17 +12,34 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# ── CSS personalizado ────────────────────────────────────────────────
+# ── Constantes ───────────────────────────────────────────────────────
+STAGES = [
+    "Asignado",
+    "Visitado",
+    "Interesado",
+    "Esperando Aprobación",
+    "Cierre ganado",
+    "Cierre perdido",
+]
+
+STAGE_COLORS = {
+    "Asignado":             "#888780",
+    "Visitado":             "#378ADD",
+    "Interesado":           "#BA7517",
+    "Esperando Aprobación": "#7F77DD",
+    "Cierre ganado":        "#0F6E56",
+    "Cierre perdido":       "#A32D2D",
+}
+
+# ── CSS ──────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
-    /* Tarjeta de negocio */
     .deal-card {
         background: #ffffff;
         border: 1px solid #e5e5e5;
         border-radius: 10px;
         padding: 12px 14px;
         margin-bottom: 10px;
-        transition: box-shadow 0.2s;
     }
     .deal-card:hover { box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
     .deal-name { font-weight: 600; font-size: 13px; color: #1a1a1a; margin-bottom: 2px; }
@@ -30,47 +49,36 @@ st.markdown("""
     .deal-footer { display: flex; justify-content: space-between; align-items: center; margin-top: 8px; }
     .deal-amount { font-weight: 600; font-size: 13px; color: #1a1a1a; }
     .deal-prob { font-size: 11px; padding: 2px 8px; border-radius: 99px; }
-
-    /* Columna kanban */
-    .stage-header {
-        padding: 8px 0 10px 0;
-        border-radius: 0;
-        margin-bottom: 8px;
-        font-weight: 600;
-        font-size: 13px;
-        display: flex;
-        align-items: center;
-        gap: 6px;
-    }
-    .stage-dot {
-        width: 8px; height: 8px; border-radius: 50%; display: inline-block;
-    }
-    .stage-count {
-        background: #f0f0f0; border-radius: 99px;
-        padding: 1px 7px; font-size: 11px; font-weight: 400; color: #555;
-    }
-
-    /* Ocultar header por defecto de streamlit */
     #MainMenu { visibility: hidden; }
     footer { visibility: hidden; }
-
-    /* Reducir padding lateral en columnas */
     [data-testid="column"] { padding: 0 4px !important; }
 </style>
 """, unsafe_allow_html=True)
 
 
-# ── Sidebar: configuración ───────────────────────────────────────────
+# ── Carga de datos ───────────────────────────────────────────────────
+@st.cache_data(ttl=3600)
+def load_deals(source="mock", webhook_url=""):
+    if source == "webhook" and webhook_url:
+        try:
+            res = requests.get(webhook_url, timeout=10)
+            res.raise_for_status()
+            return res.json()
+        except Exception as e:
+            st.warning(f"No se pudo conectar al webhook ({e}). Usando datos de prueba.")
+
+    data_path = Path(__file__).parent / "deals.json"
+    with open(data_path, encoding="utf-8") as f:
+        return json.load(f)
+
+
+# ── Sidebar ───────────────────────────────────────────────────────────
 with st.sidebar:
-    st.image("https://via.placeholder.com/180x40/7F77DD/ffffff?text=Pipeline+CRM", use_column_width=True)
+    st.markdown("## 📊 Pipeline CRM")
     st.markdown("---")
 
     st.subheader("Fuente de datos")
-    source = st.radio(
-        "Origen",
-        ["Datos de prueba", "Webhook n8n"],
-        help="Datos de prueba usa el archivo local. Webhook conecta a n8n/HubSpot."
-    )
+    source = st.radio("Origen", ["Datos de prueba", "Webhook n8n"])
 
     webhook_url = ""
     if source == "Webhook n8n":
@@ -89,11 +97,7 @@ with st.sidebar:
     vendedores = ["Todos"] + sorted(df_all["vendedor"].unique().tolist())
     vendedor_sel = st.selectbox("Vendedor", vendedores)
 
-    etapas_sel = st.multiselect(
-        "Etapas visibles",
-        STAGES,
-        default=STAGES,
-    )
+    etapas_sel = st.multiselect("Etapas visibles", STAGES, default=STAGES)
 
     monto_min, monto_max = int(df_all["monto"].min()), int(df_all["monto"].max())
     rango_monto = st.slider(
@@ -109,10 +113,10 @@ with st.sidebar:
         st.cache_data.clear()
         st.rerun()
 
-    st.caption("Datos sincronizados cada 1 hora (ttl=3600)")
+    st.caption("Datos sincronizados cada 1 hora")
 
 
-# ── Filtrar datos ────────────────────────────────────────────────────
+# ── Filtrar datos ─────────────────────────────────────────────────────
 df = df_all.copy()
 if vendedor_sel != "Todos":
     df = df[df["vendedor"] == vendedor_sel]
@@ -120,22 +124,18 @@ df = df[df["etapa"].isin(etapas_sel)]
 df = df[(df["monto"] >= rango_monto[0]) & (df["monto"] <= rango_monto[1])]
 
 
-# ── Header ───────────────────────────────────────────────────────────
+# ── Header ────────────────────────────────────────────────────────────
 st.markdown("## 📊 Pipeline de Ventas")
-if vendedor_sel != "Todos":
-    st.caption(f"Mostrando negocios de **{vendedor_sel}**")
-else:
-    st.caption("Todos los vendedores")
+st.caption(f"Vendedor: **{vendedor_sel}**" if vendedor_sel != "Todos" else "Todos los vendedores")
 
-# ── Métricas resumen ─────────────────────────────────────────────────
+# ── Métricas ──────────────────────────────────────────────────────────
 m1, m2, m3, m4, m5 = st.columns(5)
-
 total_val = df[df["etapa"] != "Cierre perdido"]["monto"].sum()
 ganados   = df[df["etapa"] == "Cierre ganado"]
 perdidos  = df[df["etapa"] == "Cierre perdido"]
 activos   = df[~df["etapa"].isin(["Cierre ganado", "Cierre perdido"])]
 
-m1.metric("Negocios totales", len(df))
+m1.metric("Total negocios", len(df))
 m2.metric("Valor pipeline", f"${total_val:,.0f}")
 m3.metric("Activos", len(activos))
 m4.metric("Ganados", len(ganados), delta=f"${ganados['monto'].sum():,.0f}")
@@ -144,28 +144,20 @@ m5.metric("Perdidos", len(perdidos))
 st.divider()
 
 
-# ── Helpers ──────────────────────────────────────────────────────────
-def prob_style(p: int, etapa: str) -> str:
-    if etapa == "Cierre ganado":
-        return "background:#E1F5EE; color:#085041;"
-    if etapa == "Cierre perdido":
-        return "background:#FCEBEB; color:#791F1F;"
-    if p >= 70:
-        return "background:#EAF3DE; color:#3B6D11;"
-    if p >= 40:
-        return "background:#FAEEDA; color:#854F0B;"
+# ── Helpers ───────────────────────────────────────────────────────────
+def prob_style(p, etapa):
+    if etapa == "Cierre ganado":  return "background:#E1F5EE; color:#085041;"
+    if etapa == "Cierre perdido": return "background:#FCEBEB; color:#791F1F;"
+    if p >= 70: return "background:#EAF3DE; color:#3B6D11;"
+    if p >= 40: return "background:#FAEEDA; color:#854F0B;"
     return "background:#FAECE7; color:#993C1D;"
 
-
-def fmt_usd(n: int) -> str:
-    if n >= 1_000_000:
-        return f"${n/1_000_000:.1f}M"
-    if n >= 1_000:
-        return f"${n/1_000:.0f}K"
+def fmt_usd(n):
+    if n >= 1_000_000: return f"${n/1_000_000:.1f}M"
+    if n >= 1_000:     return f"${n/1_000:.0f}K"
     return f"${n}"
 
-
-def render_card(deal: dict) -> str:
+def render_card(deal):
     prob_css = prob_style(deal["probabilidad"], deal["etapa"])
     dias_txt = f"{deal['dias_en_etapa']} día{'s' if deal['dias_en_etapa'] != 1 else ''} en etapa"
     return f"""
@@ -184,7 +176,7 @@ def render_card(deal: dict) -> str:
     """
 
 
-# ── Kanban board ─────────────────────────────────────────────────────
+# ── Kanban ────────────────────────────────────────────────────────────
 visible_stages = [s for s in STAGES if s in etapas_sel]
 cols = st.columns(len(visible_stages))
 
@@ -193,31 +185,24 @@ for i, stage in enumerate(visible_stages):
     color = STAGE_COLORS[stage]
 
     with cols[i]:
-        # Header de columna
         st.markdown(
-            f"""<div class="stage-header" style="border-top: 3px solid {color}; padding-top: 10px;">
-                <span class="stage-dot" style="background:{color}"></span>
-                {stage}
-                <span class="stage-count">{len(stage_df)}</span>
+            f"""<div style="border-top: 3px solid {color}; padding-top: 10px; margin-bottom: 10px;">
+                <span style="font-weight:600; font-size:13px;">{stage}</span>
+                <span style="background:#f0f0f0; border-radius:99px; padding:1px 8px;
+                             font-size:11px; color:#555; margin-left:6px;">{len(stage_df)}</span>
             </div>""",
             unsafe_allow_html=True
         )
 
         if stage_df.empty:
-            st.markdown(
-                "<div style='text-align:center; color:#aaa; font-size:12px; padding:20px 0;'>Sin negocios</div>",
-                unsafe_allow_html=True
-            )
+            st.markdown("<div style='text-align:center; color:#aaa; font-size:12px; padding:20px 0;'>Sin negocios</div>", unsafe_allow_html=True)
         else:
             for _, deal in stage_df.iterrows():
                 st.markdown(render_card(deal.to_dict()), unsafe_allow_html=True)
 
-        # Total de columna
         if not stage_df.empty:
-            total_col = stage_df["monto"].sum()
             st.markdown(
-                f"<div style='text-align:center; font-size:11px; color:#888; "
-                f"border-top:1px solid #eee; padding-top:6px; margin-top:4px;'>"
-                f"Total: <b>{fmt_usd(int(total_col))}</b></div>",
+                f"<div style='text-align:center; font-size:11px; color:#888; border-top:1px solid #eee; padding-top:6px; margin-top:4px;'>"
+                f"Total: <b>{fmt_usd(int(stage_df['monto'].sum()))}</b></div>",
                 unsafe_allow_html=True
             )
