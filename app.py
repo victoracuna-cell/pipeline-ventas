@@ -4,425 +4,402 @@ import json
 import requests
 from pathlib import Path
 
-st.set_page_config(
-    page_title="Pipeline TUU",
-    layout="wide",
-    initial_sidebar_state="expanded",
-)
+st.set_page_config(page_title="Pipeline TUU", layout="wide", initial_sidebar_state="expanded")
 
-# ── Autenticación ─────────────────────────────────────────────────────
+st.markdown("""
+<style>
+    [data-testid="stAppViewContainer"] { background: #f9fafb; }
+    [data-testid="stSidebar"] { background: #ffffff; border-right: 1px solid #f0f0f0; }
+    [data-testid="stSidebar"] * { color: #0f172a !important; }
+    .stMetric { background: #ffffff; border: 1px solid #f0f0f0; border-radius: 12px; padding: 16px 20px; }
+    .stMetric label { color: #94a3b8 !important; font-size: 12px !important; font-weight: 500 !important; text-transform: uppercase; letter-spacing: 0.05em; }
+    .stMetric [data-testid="stMetricValue"] { color: #0f172a !important; font-size: 28px !important; font-weight: 700 !important; }
+    div[data-testid="column"] { padding: 0 6px !important; }
+    .block-container { padding-top: 2rem !important; padding-bottom: 2rem !important; }
+    #MainMenu, footer, header { visibility: hidden; }
+    .stRadio label { font-size: 13px !important; }
+    .stButton button {
+        background: #ffffff !important; border: 1px solid #e2e8f0 !important;
+        color: #0f172a !important; font-size: 13px !important; font-weight: 500 !important;
+        border-radius: 8px !important; padding: 6px 12px !important;
+    }
+    .stButton button:hover { background: #f8fafc !important; border-color: #cbd5e1 !important; }
+</style>
+""", unsafe_allow_html=True)
+
+# ── Auth ──────────────────────────────────────────────────────────────
 def check_login():
-    usuarios = st.secrets.get("usuarios", {})
-
     if "logged_in" not in st.session_state:
         st.session_state.logged_in = False
     if "login_error" not in st.session_state:
         st.session_state.login_error = False
 
     if not st.session_state.logged_in:
-        col_left, col_center, col_right = st.columns([1, 1.2, 1])
-        with col_center:
-            st.markdown("<div style='height:60px'></div>", unsafe_allow_html=True)
+        st.markdown("""
+        <style>
+            [data-testid="stAppViewContainer"] { background: #ffffff; }
+            [data-testid="stSidebar"] { display: none; }
+        </style>
+        """, unsafe_allow_html=True)
+
+        _, col, _ = st.columns([1, 1, 1])
+        with col:
+            st.markdown("<div style='height:80px'></div>", unsafe_allow_html=True)
             st.markdown("""
-                <div style="text-align:center; margin-bottom:28px;">
-                    <span style="font-size:36px; font-weight:800; color:#1A4ED8; letter-spacing:-1px;">TUU</span>
-                    <div style="font-size:14px; color:#64748b; margin-top:4px;">Pipeline de Ventas en Terreno</div>
+                <div style='text-align:center; margin-bottom:40px;'>
+                    <div style='font-size:40px; font-weight:800; color:#1A4ED8; letter-spacing:-2px; line-height:1;'>TUU</div>
+                    <div style='font-size:13px; color:#94a3b8; margin-top:6px; letter-spacing:0.05em; text-transform:uppercase;'>Pipeline de Ventas</div>
                 </div>
             """, unsafe_allow_html=True)
 
-            with st.form("login_form"):
-                correo = st.text_input("Correo", placeholder="tu@tuu.cl")
-                clave  = st.text_input("Contrasena", type="password", placeholder="••••••••")
-                submit = st.form_submit_button("Ingresar", use_container_width=True, type="primary")
-
-                if submit:
+            with st.form("login"):
+                correo = st.text_input("", placeholder="Correo electronico")
+                clave  = st.text_input("", placeholder="Contrasena", type="password")
+                ok     = st.form_submit_button("Ingresar", use_container_width=True, type="primary")
+                if ok:
+                    usuarios = st.secrets.get("usuarios", {})
                     if correo in usuarios and usuarios[correo] == clave:
                         vendedores = st.secrets.get("vendedores", {})
-                        st.session_state.logged_in  = True
-                        st.session_state.usuario    = correo
-                        st.session_state.vendedor   = vendedores.get(correo, correo)
+                        st.session_state.logged_in   = True
+                        st.session_state.usuario     = correo
+                        st.session_state.vendedor    = vendedores.get(correo, correo)
                         st.session_state.login_error = False
-                        st.session_state.deals      = None
+                        st.session_state.deals       = None
                         st.rerun()
                     else:
                         st.session_state.login_error = True
 
             if st.session_state.login_error:
-                st.error("Correo o contrasena incorrectos.")
-
+                st.markdown("<div style='text-align:center; color:#ef4444; font-size:13px; margin-top:8px;'>Correo o contrasena incorrectos</div>", unsafe_allow_html=True)
         st.stop()
 
 check_login()
 
-# ── Constantes ────────────────────────────────────────────────────────
-STAGES = [
-    "Asignado",
-    "Visitado",
-    "Interesado",
-    "Esperando Aprobacion",
-    "Cierre ganado",
-    "Cierre perdido",
-]
+STAGES = ["Asignado","Visitado","Interesado","Esperando Aprobacion","Cierre ganado","Cierre perdido"]
 
-# ── Carga de datos ────────────────────────────────────────────────────
 @st.cache_data(ttl=3600)
-def load_deals_from_source(source="mock", webhook_url=""):
+def load_deals(source="mock", webhook_url=""):
     if source == "webhook" and webhook_url:
         try:
-            res = requests.get(webhook_url, timeout=10)
-            res.raise_for_status()
-            return res.json()
+            r = requests.get(webhook_url, timeout=10)
+            r.raise_for_status()
+            return r.json()
         except Exception as e:
-            st.warning(f"No se pudo conectar ({e}). Usando datos de prueba.")
-    data_path = Path(__file__).parent / "deals.json"
-    with open(data_path, encoding="utf-8") as f:
-        return json.load(f)
+            st.warning(f"Error conectando webhook: {e}")
+    return json.loads((Path(__file__).parent / "deals.json").read_text(encoding="utf-8"))
 
 if "deals" not in st.session_state:
     st.session_state.deals = None
 
-# ── Sidebar ───────────────────────────────────────────────────────────
 vendedor_activo = st.session_state.get("vendedor", "")
 
+# ── Sidebar ───────────────────────────────────────────────────────────
 with st.sidebar:
-    st.markdown("""
-        <div style="padding:8px 0 16px;">
-            <span style="font-size:22px;font-weight:700;color:#1A4ED8;">TUU</span>
-            <span style="font-size:14px;color:#64748b;margin-left:6px;">Pipeline Terreno</span>
-        </div>
-    """, unsafe_allow_html=True)
-
     st.markdown(f"""
-        <div style="background:#f0f7ff; border-radius:8px; padding:10px 12px; margin-bottom:12px;">
-            <div style="font-size:11px; color:#64748b; margin-bottom:2px;">Vendedor</div>
-            <div style="font-size:14px; font-weight:600; color:#1A4ED8;">{vendedor_activo}</div>
-            <div style="font-size:11px; color:#94a3b8; margin-top:2px;">{st.session_state.get('usuario','')}</div>
+        <div style='padding:8px 0 24px;'>
+            <span style='font-size:24px;font-weight:800;color:#1A4ED8;letter-spacing:-1px;'>TUU</span>
         </div>
+        <div style='margin-bottom:24px;'>
+            <div style='font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:4px;'>Vendedor</div>
+            <div style='font-size:15px;font-weight:700;color:#0f172a;'>{vendedor_activo}</div>
+            <div style='font-size:12px;color:#94a3b8;margin-top:2px;'>{st.session_state.get("usuario","")}</div>
+        </div>
+        <div style='height:1px;background:#f0f0f0;margin-bottom:20px;'></div>
     """, unsafe_allow_html=True)
 
-    if st.button("Cerrar sesion", use_container_width=True):
-        for key in ["logged_in", "usuario", "vendedor", "deals", "login_error"]:
-            st.session_state.pop(key, None)
-        st.rerun()
-
-    st.markdown("---")
-
-    source = st.radio("Fuente de datos", ["Datos de prueba", "Webhook n8n"])
+    source = st.radio("Datos", ["Prueba", "Webhook n8n"], label_visibility="collapsed")
     webhook_url = ""
     if source == "Webhook n8n":
-        webhook_url = st.text_input("URL del webhook", placeholder="https://tu-n8n.com/webhook/pipeline-data")
+        webhook_url = st.text_input("URL", placeholder="https://n8n.../webhook/pipeline")
 
-    st.markdown("---")
-    source_key = "mock" if source == "Datos de prueba" else "webhook"
+    st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
+    source_key = "mock" if source == "Prueba" else "webhook"
 
     if st.session_state.deals is None:
-        st.session_state.deals = load_deals_from_source(source=source_key, webhook_url=webhook_url)
+        st.session_state.deals = load_deals(source_key, webhook_url)
 
-    if st.button("Actualizar datos", use_container_width=True):
+    if st.button("Actualizar", use_container_width=True):
         st.cache_data.clear()
-        st.session_state.deals = load_deals_from_source(source=source_key, webhook_url=webhook_url)
+        st.session_state.deals = load_deals(source_key, webhook_url)
         st.rerun()
 
-    st.caption("Sincronizacion automatica cada hora")
+    st.markdown("""
+        <div style='height:1px;background:#f0f0f0;margin:20px 0;'></div>
+        <div style='font-size:11px;color:#cbd5e1;'>Sync automatico cada hora</div>
+    """, unsafe_allow_html=True)
 
-# ── Filtrar solo negocios del vendedor logueado ───────────────────────
-deals = [d for d in (st.session_state.deals or []) if d["vendedor"] == vendedor_activo]
+    st.markdown("<div style='height:16px'></div>", unsafe_allow_html=True)
+    if st.button("Cerrar sesion", use_container_width=True):
+        for k in ["logged_in","usuario","vendedor","deals","login_error"]:
+            st.session_state.pop(k, None)
+        st.rerun()
 
-# ── Metricas ──────────────────────────────────────────────────────────
+# ── Data ──────────────────────────────────────────────────────────────
+deals = [d for d in (st.session_state.deals or []) if d.get("vendedor") == vendedor_activo]
 ganados = [d for d in deals if d["etapa"] == "Cierre ganado"]
 perdidos = [d for d in deals if d["etapa"] == "Cierre perdido"]
-activos  = [d for d in deals if d["etapa"] not in ("Cierre ganado", "Cierre perdido")]
+activos  = [d for d in deals if d["etapa"] not in ("Cierre ganado","Cierre perdido")]
 valor    = sum(d["monto"] for d in deals if d["etapa"] != "Cierre perdido")
 
+# ── Header ────────────────────────────────────────────────────────────
 st.markdown(f"""
-    <div style="margin-bottom:4px;">
-        <span style="font-size:20px;font-weight:700;color:#0f172a;">Mis negocios</span>
-        <span style="font-size:14px;color:#64748b;margin-left:8px;">{vendedor_activo}</span>
+    <div style='margin-bottom:24px;'>
+        <div style='font-size:22px;font-weight:700;color:#0f172a;letter-spacing:-0.5px;'>Mis negocios</div>
+        <div style='font-size:13px;color:#94a3b8;margin-top:2px;'>{vendedor_activo}</div>
     </div>
 """, unsafe_allow_html=True)
 
-m1, m2, m3, m4 = st.columns(4)
-m1.metric("Negocios", len(deals))
-m2.metric("Valor pipeline", f"${valor:,.0f}")
-m3.metric("Activos", len(activos))
-m4.metric("Ganados / Perdidos", f"{len(ganados)} / {len(perdidos)}")
+c1,c2,c3,c4 = st.columns(4)
+c1.metric("Negocios", len(deals))
+c2.metric("Valor activo", f"${valor:,.0f}")
+c3.metric("En curso", len(activos))
+c4.metric("Ganados", len(ganados))
 
-st.markdown("<div style='margin-bottom:12px'></div>", unsafe_allow_html=True)
+st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
 
 # ── Kanban ────────────────────────────────────────────────────────────
 deals_json  = json.dumps(deals, ensure_ascii=False)
 stages_json = json.dumps(STAGES, ensure_ascii=False)
 
-kanban_html = f"""
-<!DOCTYPE html>
-<html>
-<head>
-<meta charset="utf-8">
+html = f"""<!DOCTYPE html><html><head><meta charset="utf-8">
 <style>
-  * {{ box-sizing:border-box; margin:0; padding:0; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; }}
-  body {{ background:transparent; }}
-  .board {{ display:flex; gap:10px; align-items:flex-start; overflow-x:auto; padding-bottom:12px; min-height:400px; }}
-  .column {{
-    flex:0 0 195px; min-width:175px; background:#f8fafc;
-    border-radius:10px; border:1px solid #e2e8f0;
-    display:flex; flex-direction:column; min-height:300px;
-  }}
-  .column.drag-over {{ background:#eff6ff; border-color:#1A4ED8; }}
-  .col-header {{
-    padding:10px 12px 8px; border-bottom:1px solid #e2e8f0;
-    border-radius:10px 10px 0 0; display:flex; align-items:center; gap:6px;
-  }}
-  .col-dot {{ width:8px; height:8px; border-radius:50%; flex-shrink:0; }}
-  .col-title {{ font-size:11px; font-weight:700; color:#0f172a; flex:1; text-transform:uppercase; letter-spacing:0.03em; }}
-  .col-count {{ background:#e2e8f0; color:#475569; border-radius:99px; padding:1px 7px; font-size:11px; font-weight:600; }}
-  .cards-area {{ padding:8px; flex:1; min-height:60px; }}
-  .card {{
-    background:#fff; border:1px solid #e2e8f0; border-radius:8px;
-    padding:10px 12px; margin-bottom:7px; cursor:grab;
-    transition:box-shadow 0.15s, border-color 0.15s; user-select:none;
-  }}
-  .card:hover {{ box-shadow:0 2px 8px rgba(26,78,216,0.10); border-color:#bfdbfe; }}
-  .card.dragging {{ opacity:0.4; }}
-  .card-name {{ font-size:12px; font-weight:700; color:#0f172a; margin-bottom:1px; }}
-  .card-negocio {{ font-size:11px; color:#1A4ED8; font-weight:600; margin-bottom:4px; }}
-  .card-prop {{ font-size:10px; color:#94a3b8; margin-bottom:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }}
-  .card-row {{ display:flex; justify-content:space-between; align-items:center; margin-top:6px; }}
-  .card-amount {{ font-size:12px; font-weight:700; color:#0f172a; }}
-  .card-badge {{ font-size:10px; padding:2px 7px; border-radius:99px; font-weight:600; }}
-  .card-location {{ font-size:10px; color:#cbd5e1; margin-top:3px; }}
-  .col-total {{ font-size:10px; color:#94a3b8; text-align:center; padding:5px 0 8px; border-top:1px solid #f1f5f9; }}
-  .empty-col {{ text-align:center; padding:24px 12px; color:#cbd5e1; font-size:12px; }}
-  .overlay {{
-    display:none; position:fixed; top:0; left:0; right:0; bottom:0;
-    background:rgba(15,23,42,0.5); z-index:1000; align-items:center; justify-content:center;
-  }}
-  .overlay.open {{ display:flex; }}
-  .modal {{
-    background:#fff; border-radius:14px; padding:24px;
-    width:480px; max-width:96vw; max-height:88vh; overflow-y:auto;
-    box-shadow:0 24px 64px rgba(15,23,42,0.22); animation:popIn 0.16s ease;
-  }}
-  @keyframes popIn {{ from{{transform:scale(0.96);opacity:0}} to{{transform:scale(1);opacity:1}} }}
-  .modal-top {{ display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:4px; }}
-  .modal-title {{ font-size:17px; font-weight:700; color:#0f172a; flex:1; padding-right:12px; line-height:1.3; }}
-  .modal-close {{
-    width:28px; height:28px; border-radius:6px; border:none;
-    background:#f1f5f9; color:#64748b; cursor:pointer; font-size:15px;
-    display:flex; align-items:center; justify-content:center; flex-shrink:0;
-  }}
-  .modal-close:hover {{ background:#e2e8f0; color:#0f172a; }}
-  .modal-negocio {{ font-size:13px; color:#1A4ED8; font-weight:600; margin-bottom:8px; }}
-  .modal-badge {{ display:inline-block; font-size:11px; font-weight:700; padding:3px 10px; border-radius:99px; margin-bottom:16px; }}
-  .section-title {{
-    font-size:10px; font-weight:700; color:#94a3b8; text-transform:uppercase;
-    letter-spacing:0.06em; margin:16px 0 10px; padding-bottom:6px; border-bottom:1px solid #f1f5f9;
-  }}
-  .modal-grid {{ display:grid; grid-template-columns:1fr 1fr; gap:10px; }}
-  .mf label {{ font-size:10px; color:#94a3b8; display:block; margin-bottom:2px; text-transform:uppercase; letter-spacing:0.04em; }}
-  .mf span {{ font-size:13px; color:#0f172a; font-weight:500; }}
-  .mf a {{ color:#1A4ED8; text-decoration:none; font-size:13px; font-weight:500; }}
-  .mf.full {{ grid-column:1/-1; }}
-  .nivel-badge {{ display:inline-block; font-size:11px; font-weight:600; padding:2px 9px; border-radius:99px; }}
-  .nivel-Alto {{ background:#d1fae5; color:#065f46; }}
-  .nivel-Medio {{ background:#fef3c7; color:#92400e; }}
-  .nivel-Bajo {{ background:#fee2e2; color:#991b1b; }}
-  .stage-label {{ font-size:12px; font-weight:600; color:#0f172a; margin:16px 0 8px; }}
-  .stage-select {{
-    width:100%; padding:8px 10px; border:1px solid #e2e8f0; border-radius:7px;
-    font-size:13px; color:#0f172a; background:#f8fafc; outline:none; margin-bottom:12px;
-  }}
-  .stage-select:focus {{ border-color:#1A4ED8; }}
-  .btn-save {{
-    width:100%; padding:10px; background:#1A4ED8; color:#fff;
-    border:none; border-radius:8px; font-size:13px; font-weight:700;
-    cursor:pointer; transition:background 0.15s;
-  }}
-  .btn-save:hover {{ background:#1e40af; }}
-</style>
-</head>
-<body>
+*{{box-sizing:border-box;margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;}}
+body{{background:transparent;}}
+
+.board{{display:flex;gap:12px;overflow-x:auto;padding-bottom:16px;align-items:flex-start;}}
+
+.col{{
+  flex:0 0 190px;min-width:170px;
+  background:#ffffff;
+  border:1px solid #f0f0f0;
+  border-radius:12px;
+  display:flex;flex-direction:column;
+  min-height:280px;
+  transition:border-color 0.15s;
+}}
+.col.over{{border-color:#1A4ED8;background:#f8fbff;}}
+
+.col-head{{
+  display:flex;align-items:center;gap:8px;
+  padding:12px 14px 10px;
+  border-bottom:1px solid #f8f8f8;
+}}
+.dot{{width:6px;height:6px;border-radius:50%;flex-shrink:0;}}
+.col-name{{font-size:11px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:0.06em;flex:1;}}
+.col-n{{font-size:11px;font-weight:600;color:#cbd5e1;}}
+
+.cards{{padding:8px;flex:1;}}
+
+.card{{
+  background:#ffffff;
+  border:1px solid #f0f0f0;
+  border-radius:10px;
+  padding:12px;
+  margin-bottom:8px;
+  cursor:grab;
+  transition:box-shadow 0.15s,border-color 0.15s;
+  user-select:none;
+}}
+.card:hover{{box-shadow:0 4px 16px rgba(0,0,0,0.06);border-color:#e2e8f0;}}
+.card.dragging{{opacity:0.35;box-shadow:0 8px 24px rgba(26,78,216,0.15);}}
+
+.c-contact{{font-size:13px;font-weight:600;color:#0f172a;margin-bottom:1px;line-height:1.3;}}
+.c-biz{{font-size:11px;color:#1A4ED8;font-weight:500;margin-bottom:8px;}}
+.c-info{{font-size:10px;color:#cbd5e1;margin-bottom:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}}
+.c-loc{{font-size:10px;color:#e2e8f0;margin-top:4px;}}
+.c-bottom{{display:flex;justify-content:space-between;align-items:center;margin-top:10px;padding-top:8px;border-top:1px solid #f8f8f8;}}
+.c-amt{{font-size:12px;font-weight:700;color:#0f172a;}}
+.c-prob{{font-size:10px;font-weight:600;padding:2px 7px;border-radius:6px;}}
+
+.col-foot{{font-size:10px;color:#e2e8f0;text-align:center;padding:8px;border-top:1px solid #f8f8f8;}}
+.empty{{text-align:center;padding:20px 8px;color:#e2e8f0;font-size:11px;}}
+
+/* Modal */
+.ov{{display:none;position:fixed;inset:0;background:rgba(15,23,42,0.4);z-index:999;align-items:center;justify-content:center;backdrop-filter:blur(2px);}}
+.ov.open{{display:flex;}}
+.modal{{
+  background:#fff;border-radius:16px;width:460px;max-width:94vw;
+  max-height:86vh;overflow-y:auto;
+  box-shadow:0 32px 80px rgba(15,23,42,0.18);
+  animation:up 0.18s ease;
+}}
+@keyframes up{{from{{transform:translateY(12px);opacity:0}}to{{transform:none;opacity:1}}}}
+
+.mh{{padding:20px 20px 0;display:flex;justify-content:space-between;align-items:flex-start;}}
+.m-name{{font-size:18px;font-weight:700;color:#0f172a;line-height:1.3;flex:1;padding-right:12px;}}
+.m-close{{width:28px;height:28px;border-radius:8px;border:1px solid #f0f0f0;background:#f8fafc;cursor:pointer;font-size:14px;color:#94a3b8;display:flex;align-items:center;justify-content:center;flex-shrink:0;}}
+.m-close:hover{{background:#f0f0f0;color:#0f172a;}}
+.m-biz{{padding:4px 20px 0;font-size:13px;color:#1A4ED8;font-weight:600;}}
+.m-stage{{display:inline-flex;align-items:center;margin:10px 20px 0;font-size:11px;font-weight:700;padding:4px 10px;border-radius:6px;}}
+
+.mb{{padding:0 20px;}}
+.sec{{font-size:10px;font-weight:700;color:#cbd5e1;text-transform:uppercase;letter-spacing:0.07em;margin:20px 0 10px;padding-bottom:8px;border-bottom:1px solid #f8f8f8;}}
+.grid{{display:grid;grid-template-columns:1fr 1fr;gap:12px;}}
+.f label{{font-size:10px;color:#94a3b8;display:block;margin-bottom:3px;text-transform:uppercase;letter-spacing:0.04em;}}
+.f span,.f a{{font-size:13px;color:#0f172a;font-weight:500;display:block;}}
+.f a{{color:#1A4ED8;text-decoration:none;}}
+.f.full{{grid-column:1/-1;}}
+
+.nivel{{display:inline-block;font-size:11px;font-weight:600;padding:3px 9px;border-radius:6px;}}
+.n-Alto{{background:#f0fdf4;color:#16a34a;}}
+.n-Medio{{background:#fffbeb;color:#d97706;}}
+.n-Bajo{{background:#fef2f2;color:#dc2626;}}
+
+.mf{{padding:20px;padding-top:16px;}}
+.stage-sel{{
+  width:100%;padding:9px 12px;border:1px solid #e2e8f0;border-radius:8px;
+  font-size:13px;color:#0f172a;background:#f8fafc;outline:none;margin-bottom:12px;
+  appearance:none;
+}}
+.stage-sel:focus{{border-color:#1A4ED8;}}
+.btn{{
+  width:100%;padding:11px;background:#1A4ED8;color:#fff;
+  border:none;border-radius:10px;font-size:13px;font-weight:700;
+  cursor:pointer;letter-spacing:0.01em;transition:background 0.15s;
+}}
+.btn:hover{{background:#1e40af;}}
+</style></head><body>
 <div class="board" id="board"></div>
-<div class="overlay" id="overlay">
+<div class="ov" id="ov">
   <div class="modal">
-    <div class="modal-top">
-      <div class="modal-title" id="m-title"></div>
-      <button class="modal-close" onclick="closeModal()">&#x2715;</button>
+    <div class="mh">
+      <div class="m-name" id="m-name"></div>
+      <button class="m-close" onclick="closeM()">&#x2715;</button>
     </div>
-    <div class="modal-negocio" id="m-negocio"></div>
-    <div id="m-badge" class="modal-badge"></div>
-    <div class="section-title">Contacto</div>
-    <div class="modal-grid">
-      <div class="mf"><label>Nombre</label><span id="m-nombre"></span></div>
-      <div class="mf"><label>Apellido</label><span id="m-apellido"></span></div>
-      <div class="mf"><label>Correo</label><a id="m-correo" href="#"></a></div>
-      <div class="mf"><label>Telefono</label><a id="m-tel" href="#"></a></div>
+    <div class="m-biz" id="m-biz"></div>
+    <div id="m-stage" class="m-stage"></div>
+    <div class="mb">
+      <div class="sec">Contacto</div>
+      <div class="grid">
+        <div class="f"><label>Nombre</label><span id="m-nombre"></span></div>
+        <div class="f"><label>Apellido</label><span id="m-apellido"></span></div>
+        <div class="f"><label>Correo</label><a id="m-correo" href="#"></a></div>
+        <div class="f"><label>Telefono</label><a id="m-tel" href="#"></a></div>
+      </div>
+      <div class="sec">Negocio</div>
+      <div class="grid">
+        <div class="f full"><label>Nombre del negocio</label><span id="m-negnombre"></span></div>
+        <div class="f full"><label>Descripcion</label><span id="m-desc"></span></div>
+        <div class="f"><label>Nivel de venta</label><span id="m-nivel"></span></div>
+        <div class="f"><label>Resultado visita</label><span id="m-resultado"></span></div>
+      </div>
+      <div class="sec">Ubicacion</div>
+      <div class="grid">
+        <div class="f full"><label>Direccion</label><span id="m-dir"></span></div>
+        <div class="f"><label>Comuna</label><span id="m-comuna"></span></div>
+        <div class="f"><label>Ciudad</label><span id="m-ciudad"></span></div>
+        <div class="f full"><label>Region</label><span id="m-region"></span></div>
+      </div>
+      <div class="sec">Negociacion</div>
+      <div class="grid">
+        <div class="f"><label>Valor</label><span id="m-monto"></span></div>
+        <div class="f"><label>Probabilidad</label><span id="m-prob"></span></div>
+        <div class="f"><label>Fecha creacion</label><span id="m-created"></span></div>
+        <div class="f"><label>Cierre estimado</label><span id="m-close"></span></div>
+      </div>
     </div>
-    <div class="section-title">Negocio</div>
-    <div class="modal-grid">
-      <div class="mf full"><label>Nombre del negocio</label><span id="m-negnombre"></span></div>
-      <div class="mf full"><label>Descripcion</label><span id="m-desc"></span></div>
-      <div class="mf"><label>Nivel de venta</label><span id="m-nivel"></span></div>
-      <div class="mf"><label>Resultado visita</label><span id="m-resultado"></span></div>
+    <div class="mf">
+      <div style="font-size:12px;font-weight:600;color:#0f172a;margin-bottom:8px;">Mover a etapa</div>
+      <select class="stage-sel" id="m-sel"></select>
+      <button class="btn" onclick="saveStage()">Guardar cambio</button>
     </div>
-    <div class="section-title">Ubicacion</div>
-    <div class="modal-grid">
-      <div class="mf full"><label>Direccion</label><span id="m-dir"></span></div>
-      <div class="mf"><label>Ciudad</label><span id="m-ciudad"></span></div>
-      <div class="mf"><label>Comuna</label><span id="m-comuna"></span></div>
-      <div class="mf full"><label>Region</label><span id="m-region"></span></div>
-    </div>
-    <div class="section-title">Negociacion</div>
-    <div class="modal-grid">
-      <div class="mf"><label>Valor</label><span id="m-monto"></span></div>
-      <div class="mf"><label>Probabilidad</label><span id="m-prob"></span></div>
-      <div class="mf"><label>Cierre estimado</label><span id="m-close"></span></div>
-      <div class="mf"><label>Fecha creacion</label><span id="m-created"></span></div>
-    </div>
-    <div class="stage-label">Mover a etapa</div>
-    <select class="stage-select" id="m-stage-sel"></select>
-    <button class="btn-save" onclick="saveStage()">Guardar cambio</button>
   </div>
 </div>
 <script>
-const STAGES = {stages_json};
-const COLORS = {{
-  "Asignado":"#888780","Visitado":"#1A4ED8","Interesado":"#d97706",
-  "Esperando Aprobacion":"#7c3aed","Cierre ganado":"#059669","Cierre perdido":"#dc2626"
-}};
-let deals = {deals_json};
-let draggedId = null, currentDealId = null;
+const STAGES={stages_json};
+const C={{"Asignado":"#94a3b8","Visitado":"#1A4ED8","Interesado":"#d97706","Esperando Aprobacion":"#7c3aed","Cierre ganado":"#059669","Cierre perdido":"#dc2626"}};
+let deals={deals_json},dragId=null,curId=null;
 
-function fmtUSD(n) {{
-  if (n>=1000000) return '$'+(n/1000000).toFixed(1)+'M';
-  if (n>=1000) return '$'+Math.round(n/1000)+'K';
-  return '$'+n;
-}}
-function probStyle(p, etapa) {{
-  if (etapa==='Cierre ganado') return 'background:#d1fae5;color:#065f46';
-  if (etapa==='Cierre perdido') return 'background:#fee2e2;color:#991b1b';
-  if (p>=70) return 'background:#d1fae5;color:#065f46';
-  if (p>=40) return 'background:#fef3c7;color:#92400e';
-  return 'background:#fee2e2;color:#991b1b';
+function fmt(n){{if(n>=1e6)return'$'+(n/1e6).toFixed(1)+'M';if(n>=1e3)return'$'+Math.round(n/1e3)+'K';return'$'+n;}}
+function pStyle(p,e){{
+  if(e==='Cierre ganado')return'background:#f0fdf4;color:#16a34a';
+  if(e==='Cierre perdido')return'background:#fef2f2;color:#dc2626';
+  if(p>=70)return'background:#f0fdf4;color:#16a34a';
+  if(p>=40)return'background:#fffbeb;color:#d97706';
+  return'background:#fef2f2;color:#dc2626';
 }}
 
-function buildBoard() {{
-  const board = document.getElementById('board');
-  board.innerHTML = '';
-  STAGES.forEach(stage => {{
-    const sd = deals.filter(d => d.etapa === stage);
-    const color = COLORS[stage] || '#888';
-    const total = sd.reduce((a,d) => a + d.monto, 0);
-    const col = document.createElement('div');
-    col.className = 'column';
-    col.dataset.stage = stage;
-    col.addEventListener('dragover', e => {{ e.preventDefault(); col.classList.add('drag-over'); }});
-    col.addEventListener('dragleave', () => col.classList.remove('drag-over'));
-    col.addEventListener('drop', e => {{
-      e.preventDefault(); col.classList.remove('drag-over');
-      if (draggedId) {{
-        const deal = deals.find(d => d.id === draggedId);
-        if (deal) {{ deal.etapa = stage; buildBoard(); sendUpdate(); }}
-      }}
+function build(){{
+  const b=document.getElementById('board');b.innerHTML='';
+  STAGES.forEach(s=>{{
+    const sd=deals.filter(d=>d.etapa===s),col=COLORS(s),total=sd.reduce((a,d)=>a+d.monto,0);
+    const el=document.createElement('div');el.className='col';el.dataset.stage=s;
+    el.addEventListener('dragover',e=>{{e.preventDefault();el.classList.add('over');}});
+    el.addEventListener('dragleave',()=>el.classList.remove('over'));
+    el.addEventListener('drop',e=>{{
+      e.preventDefault();el.classList.remove('over');
+      if(dragId){{const d=deals.find(x=>x.id===dragId);if(d){{d.etapa=s;build();send();}}}}
     }});
-    const cards = sd.map(d => `
+    const cards=sd.map(d=>`
       <div class="card" draggable="true" data-id="${{d.id}}"
-           ondragstart="onDragStart(event,'${{d.id}}')" ondragend="onDragEnd(event)"
-           onclick="openModal('${{d.id}}')">
-        <div class="card-name">${{d.nombre}} ${{d.apellido}}</div>
-        <div class="card-negocio">${{d.nombre_negocio}}</div>
-        <div class="card-prop">${{d.correo}}</div>
-        <div class="card-prop">${{d.telefono}}</div>
-        <div class="card-location">${{d.comuna}}, ${{d.ciudad}}</div>
-        <div class="card-row">
-          <span class="card-amount">${{fmtUSD(d.monto)}}</span>
-          <span class="card-badge" style="${{probStyle(d.probabilidad, d.etapa)}}">${{d.probabilidad}}%</span>
+        ondragstart="ds(event,'${{d.id}}')" ondragend="de(event)" onclick="openM('${{d.id}}')">
+        <div class="c-contact">${{d.nombre}} ${{d.apellido}}</div>
+        <div class="c-biz">${{d.nombre_negocio}}</div>
+        <div class="c-info">${{d.correo}}</div>
+        <div class="c-info">${{d.telefono}}</div>
+        <div class="c-loc">${{d.comuna}}, ${{d.ciudad}}</div>
+        <div class="c-bottom">
+          <span class="c-amt">${{fmt(d.monto)}}</span>
+          <span class="c-prob" style="${{pStyle(d.probabilidad,d.etapa)}}">${{d.probabilidad}}%</span>
         </div>
       </div>`).join('');
-
-    col.innerHTML = `
-      <div class="col-header">
-        <span class="col-dot" style="background:${{color}}"></span>
-        <span class="col-title">${{stage}}</span>
-        <span class="col-count">${{sd.length}}</span>
+    el.innerHTML=`
+      <div class="col-head">
+        <span class="dot" style="background:${{col}}"></span>
+        <span class="col-name">${{s}}</span>
+        <span class="col-n">${{sd.length}}</span>
       </div>
-      <div class="cards-area">
-        ${{cards || '<div class="empty-col">Sin negocios</div>'}}
-      </div>
-      ${{sd.length > 0 ? `<div class="col-total">Total: ${{fmtUSD(total)}}</div>` : ''}}
-    `;
-    board.appendChild(col);
+      <div class="cards">${{cards||'<div class="empty">Sin negocios</div>'}}</div>
+      ${{sd.length?`<div class="col-foot">${{fmt(total)}}</div>`:''}}`;
+    b.appendChild(el);
   }});
 }}
 
-function onDragStart(e, id) {{
-  draggedId = id;
-  setTimeout(() => {{ const el = document.querySelector(`[data-id="${{id}}"]`); if(el) el.classList.add('dragging'); }}, 0);
+function COLORS(s){{return C[s]||'#94a3b8';}}
+function ds(e,id){{dragId=id;setTimeout(()=>{{const el=document.querySelector(`[data-id="${{id}}"]`);if(el)el.classList.add('dragging');}},0);}}
+function de(e){{e.target.classList.remove('dragging');dragId=null;}}
+
+function openM(id){{
+  const d=deals.find(x=>x.id===id);if(!d)return;curId=id;
+  const col=COLORS(d.etapa);
+  document.getElementById('m-name').textContent=d.nombre+' '+d.apellido;
+  document.getElementById('m-biz').textContent=d.nombre_negocio;
+  const sb=document.getElementById('m-stage');
+  sb.textContent=d.etapa;sb.style.cssText=`background:${{col}}18;color:${{col}};border:1px solid ${{col}}30;`;
+  document.getElementById('m-nombre').textContent=d.nombre;
+  document.getElementById('m-apellido').textContent=d.apellido;
+  const mc=document.getElementById('m-correo');mc.textContent=d.correo;mc.href='mailto:'+d.correo;
+  const mt=document.getElementById('m-tel');mt.textContent=d.telefono;mt.href='tel:'+d.telefono;
+  document.getElementById('m-negnombre').textContent=d.nombre_negocio;
+  document.getElementById('m-desc').textContent=d.descripcion_negocio||'—';
+  document.getElementById('m-nivel').innerHTML=`<span class="nivel n-${{d.nivel_venta}}">${{d.nivel_venta}}</span>`;
+  document.getElementById('m-resultado').textContent=d.resultado_visita||'—';
+  document.getElementById('m-dir').textContent=(d.calle||'')+' '+(d.numero||'');
+  document.getElementById('m-comuna').textContent=d.comuna||'—';
+  document.getElementById('m-ciudad').textContent=d.ciudad||'—';
+  document.getElementById('m-region').textContent=d.region||'—';
+  document.getElementById('m-monto').textContent='$'+(d.monto||0).toLocaleString('es-CL')+' USD';
+  document.getElementById('m-prob').textContent=d.probabilidad+'%';
+  document.getElementById('m-created').textContent=d.fecha_creacion||'—';
+  document.getElementById('m-close').textContent=d.fecha_cierre_est||'—';
+  document.getElementById('m-sel').innerHTML=STAGES.map(s=>`<option value="${{s}}" ${{s===d.etapa?'selected':''}}>${{s}}</option>`).join('');
+  document.getElementById('ov').classList.add('open');
 }}
-function onDragEnd(e) {{ e.target.classList.remove('dragging'); draggedId = null; }}
-
-function openModal(id) {{
-  const d = deals.find(x => x.id === id); if (!d) return;
-  currentDealId = id;
-  const color = COLORS[d.etapa] || '#888';
-  document.getElementById('m-title').textContent = d.nombre + ' ' + d.apellido;
-  document.getElementById('m-negocio').textContent = d.nombre_negocio;
-  document.getElementById('m-badge').textContent = d.etapa;
-  document.getElementById('m-badge').style.cssText = `background:${{color}}22;color:${{color}};`;
-  document.getElementById('m-nombre').textContent = d.nombre;
-  document.getElementById('m-apellido').textContent = d.apellido;
-  document.getElementById('m-correo').textContent = d.correo;
-  document.getElementById('m-correo').href = 'mailto:' + d.correo;
-  document.getElementById('m-tel').textContent = d.telefono;
-  document.getElementById('m-tel').href = 'tel:' + d.telefono;
-  document.getElementById('m-negnombre').textContent = d.nombre_negocio;
-  document.getElementById('m-desc').textContent = d.descripcion_negocio || '—';
-  document.getElementById('m-nivel').innerHTML = `<span class="nivel-badge nivel-${{d.nivel_venta}}">${{d.nivel_venta}}</span>`;
-  document.getElementById('m-resultado').textContent = d.resultado_visita || '—';
-  document.getElementById('m-dir').textContent = (d.calle||'') + ' ' + (d.numero||'');
-  document.getElementById('m-ciudad').textContent = d.ciudad || '—';
-  document.getElementById('m-comuna').textContent = d.comuna || '—';
-  document.getElementById('m-region').textContent = d.region || '—';
-  document.getElementById('m-monto').textContent = '$' + (d.monto||0).toLocaleString('es-CL') + ' USD';
-  document.getElementById('m-prob').textContent = d.probabilidad + '%';
-  document.getElementById('m-close').textContent = d.fecha_cierre_est || '—';
-  document.getElementById('m-created').textContent = d.fecha_creacion || '—';
-  const sel = document.getElementById('m-stage-sel');
-  sel.innerHTML = STAGES.map(s => `<option value="${{s}}" ${{s===d.etapa?'selected':''}}>${{s}}</option>`).join('');
-  document.getElementById('overlay').classList.add('open');
+function closeM(){{document.getElementById('ov').classList.remove('open');curId=null;}}
+function saveStage(){{
+  const ns=document.getElementById('m-sel').value;
+  const d=deals.find(x=>x.id===curId);if(d){{d.etapa=ns;build();send();}}closeM();
 }}
+function send(){{window.parent.postMessage({{type:'streamlit:setComponentValue',value:JSON.stringify(deals)}},'*');}}
+document.getElementById('ov').addEventListener('click',e=>{{if(e.target.id==='ov')closeM();}});
+build();
+</script></body></html>"""
 
-function closeModal() {{ document.getElementById('overlay').classList.remove('open'); currentDealId = null; }}
-
-function saveStage() {{
-  const ns = document.getElementById('m-stage-sel').value;
-  const deal = deals.find(d => d.id === currentDealId);
-  if (deal) {{ deal.etapa = ns; buildBoard(); sendUpdate(); }}
-  closeModal();
-}}
-
-function sendUpdate() {{
-  window.parent.postMessage({{type:'streamlit:setComponentValue', value: JSON.stringify(deals)}}, '*');
-}}
-
-document.getElementById('overlay').addEventListener('click', e => {{
-  if (e.target.id === 'overlay') closeModal();
-}});
-
-buildBoard();
-</script>
-</body>
-</html>
-"""
-
-result = components.html(kanban_html, height=720, scrolling=True)
+result = components.html(html, height=700, scrolling=True)
 if result:
     try:
         updated = json.loads(result)
-        # Actualizar solo los deals del vendedor activo en el estado global
-        all_deals = st.session_state.deals or []
-        updated_ids = {{d["id"]: d for d in updated}}
-        st.session_state.deals = [
-            updated_ids.get(d["id"], d) for d in all_deals
-        ]
+        ids = {{d["id"]: d for d in updated}}
+        st.session_state.deals = [ids.get(d["id"], d) for d in (st.session_state.deals or [])]
     except Exception:
         pass
