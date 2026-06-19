@@ -1,12 +1,12 @@
 import streamlit as st
-import pandas as pd
+import streamlit.components.v1 as components
 import json
 import requests
 from pathlib import Path
 
 st.set_page_config(
-    page_title="Pipeline de Ventas",
-    page_icon="📊",
+    page_title="Pipeline TUU",
+    page_icon="https://www.tuu.cl/assets/images/logo/smile-tuu-logo.svg",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -15,50 +15,14 @@ STAGES = [
     "Asignado",
     "Visitado",
     "Interesado",
-    "Esperando Aprobación",
+    "Esperando Aprobacion",
     "Cierre ganado",
     "Cierre perdido",
 ]
 
-STAGE_COLORS = {
-    "Asignado":             "#888780",
-    "Visitado":             "#378ADD",
-    "Interesado":           "#BA7517",
-    "Esperando Aprobación": "#7F77DD",
-    "Cierre ganado":        "#0F6E56",
-    "Cierre perdido":       "#A32D2D",
-}
-
-st.markdown("""
-<style>
-    .deal-card {
-        background: #ffffff;
-        border: 1px solid #e5e5e5;
-        border-radius: 10px;
-        padding: 12px 14px;
-        margin-bottom: 10px;
-        cursor: pointer;
-        transition: box-shadow 0.2s;
-    }
-    .deal-card:hover { box-shadow: 0 2px 10px rgba(0,0,0,0.12); border-color: #ccc; }
-    .deal-name { font-weight: 600; font-size: 13px; color: #1a1a1a; margin-bottom: 2px; }
-    .deal-company { font-size: 12px; color: #666; margin-bottom: 6px; }
-    .deal-prop { font-size: 11px; color: #555; margin-bottom: 2px; }
-    .deal-footer { display: flex; justify-content: space-between; align-items: center; margin-top: 8px; }
-    .deal-amount { font-weight: 600; font-size: 13px; color: #1a1a1a; }
-    .deal-prob { font-size: 11px; padding: 2px 8px; border-radius: 99px; }
-    .prop-label { font-size: 12px; color: #888; margin-bottom: 2px; }
-    .prop-value { font-size: 14px; color: #1a1a1a; margin-bottom: 12px; font-weight: 500; }
-    #MainMenu { visibility: hidden; }
-    footer { visibility: hidden; }
-    [data-testid="column"] { padding: 0 4px !important; }
-    div[data-testid="stDialog"] > div { max-width: 520px !important; }
-</style>
-""", unsafe_allow_html=True)
-
-
+# ── Carga de datos ────────────────────────────────────────────────────
 @st.cache_data(ttl=3600)
-def load_deals(source="mock", webhook_url=""):
+def load_deals_from_source(source="mock", webhook_url=""):
     if source == "webhook" and webhook_url:
         try:
             res = requests.get(webhook_url, timeout=10)
@@ -70,214 +34,365 @@ def load_deals(source="mock", webhook_url=""):
     with open(data_path, encoding="utf-8") as f:
         return json.load(f)
 
-
-def prob_style(p, etapa):
-    if etapa == "Cierre ganado":  return "background:#E1F5EE; color:#085041;"
-    if etapa == "Cierre perdido": return "background:#FCEBEB; color:#791F1F;"
-    if p >= 70: return "background:#EAF3DE; color:#3B6D11;"
-    if p >= 40: return "background:#FAEEDA; color:#854F0B;"
-    return "background:#FAECE7; color:#993C1D;"
-
-def fmt_usd(n):
-    if n >= 1_000_000: return f"${n/1_000_000:.1f}M"
-    if n >= 1_000:     return f"${n/1_000:.0f}K"
-    return f"${n}"
-
-
-# ── Estado de sesión ─────────────────────────────────────────────────
+# ── Estado de sesión ──────────────────────────────────────────────────
 if "deals" not in st.session_state:
     st.session_state.deals = None
-if "selected_deal" not in st.session_state:
-    st.session_state.selected_deal = None
-if "show_modal" not in st.session_state:
-    st.session_state.show_modal = False
-
+if "vendedor_sel" not in st.session_state:
+    st.session_state.vendedor_sel = "Todos"
 
 # ── Sidebar ───────────────────────────────────────────────────────────
 with st.sidebar:
-    st.markdown("## Pipeline CRM")
+    st.markdown("""
+        <div style="padding: 8px 0 16px;">
+            <span style="font-size:22px; font-weight:700; color:#1A4ED8; letter-spacing:-0.5px;">TUU</span>
+            <span style="font-size:14px; color:#64748b; margin-left:6px;">Pipeline</span>
+        </div>
+    """, unsafe_allow_html=True)
     st.markdown("---")
 
-    st.subheader("Fuente de datos")
-    source = st.radio("Origen", ["Datos de prueba", "Webhook n8n"])
-
+    source = st.radio("Fuente de datos", ["Datos de prueba", "Webhook n8n"])
     webhook_url = ""
     if source == "Webhook n8n":
-        webhook_url = st.text_input(
-            "URL del webhook",
-            placeholder="https://tu-n8n.com/webhook/pipeline-data"
-        )
+        webhook_url = st.text_input("URL del webhook", placeholder="https://tu-n8n.com/webhook/pipeline-data")
 
     st.markdown("---")
-    st.subheader("Filtros")
-
     source_key = "mock" if source == "Datos de prueba" else "webhook"
-    raw_deals = load_deals(source=source_key, webhook_url=webhook_url)
 
     if st.session_state.deals is None:
-        st.session_state.deals = raw_deals
+        st.session_state.deals = load_deals_from_source(source=source_key, webhook_url=webhook_url)
 
-    df_all = pd.DataFrame(st.session_state.deals)
+    all_deals = st.session_state.deals
+    vendedores = ["Todos"] + sorted(set(d["vendedor"] for d in all_deals))
 
-    vendedores = ["Todos"] + sorted(df_all["vendedor"].unique().tolist())
     vendedor_sel = st.selectbox("Vendedor", vendedores)
+    st.session_state.vendedor_sel = vendedor_sel
 
-    etapas_sel = st.multiselect("Etapas visibles", STAGES, default=STAGES)
-
-    st.markdown("---")
     if st.button("Actualizar datos", use_container_width=True):
         st.cache_data.clear()
-        st.session_state.deals = load_deals(source=source_key, webhook_url=webhook_url)
+        st.session_state.deals = load_deals_from_source(source=source_key, webhook_url=webhook_url)
         st.rerun()
 
-    st.caption("Datos sincronizados cada 1 hora")
+    st.caption("Sincronizacion automatica cada hora")
 
-
-# ── Filtrar ───────────────────────────────────────────────────────────
-df = pd.DataFrame(st.session_state.deals)
+# ── Filtrar deals ──────────────────────────────────────────────────────
+deals = st.session_state.deals or []
 if vendedor_sel != "Todos":
-    df = df[df["vendedor"] == vendedor_sel]
-df = df[df["etapa"].isin(etapas_sel)]
+    deals = [d for d in deals if d["vendedor"] == vendedor_sel]
 
+# ── Metricas ───────────────────────────────────────────────────────────
+total = len(deals)
+ganados = [d for d in deals if d["etapa"] == "Cierre ganado"]
+perdidos = [d for d in deals if d["etapa"] == "Cierre perdido"]
+activos  = [d for d in deals if d["etapa"] not in ("Cierre ganado", "Cierre perdido")]
+valor    = sum(d["monto"] for d in deals if d["etapa"] != "Cierre perdido")
 
-# ── Header y métricas ─────────────────────────────────────────────────
-st.markdown("## Pipeline de Ventas")
-st.caption(f"Vendedor: **{vendedor_sel}**" if vendedor_sel != "Todos" else "Todos los vendedores")
+st.markdown(f"""
+<div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:4px;">
+  <div>
+    <span style="font-size:20px; font-weight:700; color:#0f172a;">Pipeline de Ventas</span>
+    <span style="font-size:13px; color:#64748b; margin-left:10px;">
+      {"Todos los vendedores" if vendedor_sel == "Todos" else vendedor_sel}
+    </span>
+  </div>
+</div>
+""", unsafe_allow_html=True)
 
-m1, m2, m3, m4, m5 = st.columns(5)
-total_val = df[df["etapa"] != "Cierre perdido"]["monto"].sum()
-ganados   = df[df["etapa"] == "Cierre ganado"]
-perdidos  = df[df["etapa"] == "Cierre perdido"]
-activos   = df[~df["etapa"].isin(["Cierre ganado", "Cierre perdido"])]
-
-m1.metric("Total negocios", len(df))
-m2.metric("Valor pipeline", f"${total_val:,.0f}")
+m1, m2, m3, m4 = st.columns(4)
+m1.metric("Negocios", total)
+m2.metric("Valor pipeline", f"${valor:,.0f}")
 m3.metric("Activos", len(activos))
-m4.metric("Ganados", len(ganados), delta=f"${ganados['monto'].sum():,.0f}")
-m5.metric("Perdidos", len(perdidos))
+m4.metric("Ganados / Perdidos", f"{len(ganados)} / {len(perdidos)}")
 
-st.divider()
+st.markdown("<div style='margin-bottom:16px'></div>", unsafe_allow_html=True)
 
+# ── Kanban con drag & drop ─────────────────────────────────────────────
+deals_json = json.dumps(deals, ensure_ascii=False)
+stages_json = json.dumps(STAGES, ensure_ascii=False)
 
-# ── Modal de detalle ──────────────────────────────────────────────────
-@st.dialog("Detalle del negocio")
-def show_deal_modal(deal):
-    color = STAGE_COLORS.get(deal["etapa"], "#888")
+kanban_html = f"""
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  * {{ box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }}
+  body {{ background: transparent; padding: 0; }}
 
-    st.markdown(f"### {deal['nombre']}")
-    st.markdown(
-        f"<span style='background:{color}22; color:{color}; padding:3px 10px; "
-        f"border-radius:99px; font-size:12px; font-weight:600;'>{deal['etapa']}</span>",
-        unsafe_allow_html=True
-    )
-    st.markdown("---")
+  .board {{ display: flex; gap: 10px; align-items: flex-start; overflow-x: auto; padding-bottom: 12px; }}
 
-    c1, c2 = st.columns(2)
-    with c1:
-        st.markdown("<div class='prop-label'>Empresa</div>", unsafe_allow_html=True)
-        st.markdown(f"<div class='prop-value'>{deal['empresa']}</div>", unsafe_allow_html=True)
+  .column {{
+    flex: 0 0 200px;
+    min-width: 180px;
+    background: #f8fafc;
+    border-radius: 10px;
+    padding: 0;
+    min-height: 300px;
+    display: flex;
+    flex-direction: column;
+    border: 1px solid #e2e8f0;
+  }}
+  .column.drag-over {{ background: #eff6ff; border-color: #1A4ED8; }}
 
-        st.markdown("<div class='prop-label'>Correo</div>", unsafe_allow_html=True)
-        st.markdown(f"<div class='prop-value'>{deal['correo']}</div>", unsafe_allow_html=True)
+  .col-header {{
+    padding: 10px 12px 8px;
+    border-bottom: 1px solid #e2e8f0;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    border-radius: 10px 10px 0 0;
+  }}
+  .col-dot {{ width:8px; height:8px; border-radius:50%; flex-shrink:0; }}
+  .col-title {{ font-size: 12px; font-weight: 600; color: #0f172a; flex:1; }}
+  .col-count {{
+    background: #e2e8f0; color: #475569;
+    border-radius: 99px; padding: 1px 7px;
+    font-size: 11px; font-weight: 600;
+  }}
 
-        st.markdown("<div class='prop-label'>Telefono</div>", unsafe_allow_html=True)
-        st.markdown(f"<div class='prop-value'>{deal['telefono']}</div>", unsafe_allow_html=True)
+  .cards-area {{ padding: 8px; flex: 1; min-height: 60px; }}
 
-        st.markdown("<div class='prop-label'>Vendedor</div>", unsafe_allow_html=True)
-        st.markdown(f"<div class='prop-value'>{deal['vendedor']}</div>", unsafe_allow_html=True)
+  .card {{
+    background: #fff;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    padding: 10px 12px;
+    margin-bottom: 7px;
+    cursor: grab;
+    transition: box-shadow 0.15s, border-color 0.15s;
+    user-select: none;
+  }}
+  .card:hover {{ box-shadow: 0 2px 8px rgba(26,78,216,0.10); border-color: #bfdbfe; }}
+  .card.dragging {{ opacity: 0.45; box-shadow: 0 4px 16px rgba(26,78,216,0.18); }}
+  .card-name {{ font-size: 12px; font-weight: 600; color: #0f172a; margin-bottom: 2px; line-height:1.3; }}
+  .card-company {{ font-size: 11px; color: #64748b; margin-bottom: 6px; }}
+  .card-row {{ display:flex; justify-content:space-between; align-items:center; margin-top:4px; }}
+  .card-amount {{ font-size: 12px; font-weight: 600; color: #1A4ED8; }}
+  .card-prob {{ font-size: 10px; padding: 1px 7px; border-radius: 99px; font-weight:500; }}
+  .card-prop {{ font-size: 10px; color: #94a3b8; margin-top:3px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }}
 
-    with c2:
-        st.markdown("<div class='prop-label'>Valor</div>", unsafe_allow_html=True)
-        st.markdown(f"<div class='prop-value'>${deal['monto']:,.0f} USD</div>", unsafe_allow_html=True)
+  .col-total {{ font-size:10px; color:#94a3b8; text-align:center; padding:6px 0 8px; border-top:1px solid #f1f5f9; }}
 
-        st.markdown("<div class='prop-label'>Probabilidad</div>", unsafe_allow_html=True)
-        st.markdown(f"<div class='prop-value'>{deal['probabilidad']}%</div>", unsafe_allow_html=True)
+  /* Modal */
+  .overlay {{
+    display:none; position:fixed; top:0; left:0; right:0; bottom:0;
+    background:rgba(15,23,42,0.45); z-index:1000; align-items:center; justify-content:center;
+  }}
+  .overlay.open {{ display:flex; }}
+  .modal {{
+    background:#fff; border-radius:14px; padding:24px;
+    width:420px; max-width:95vw; max-height:90vh; overflow-y:auto;
+    box-shadow: 0 20px 60px rgba(15,23,42,0.2);
+    animation: popIn 0.18s ease;
+  }}
+  @keyframes popIn {{ from{{transform:scale(0.95);opacity:0}} to{{transform:scale(1);opacity:1}} }}
+  .modal-header {{ display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:16px; }}
+  .modal-title {{ font-size:16px; font-weight:700; color:#0f172a; line-height:1.3; flex:1; padding-right:12px; }}
+  .modal-close {{
+    width:28px; height:28px; border-radius:6px; border:none;
+    background:#f1f5f9; color:#64748b; cursor:pointer; font-size:16px;
+    display:flex; align-items:center; justify-content:center; flex-shrink:0;
+  }}
+  .modal-close:hover {{ background:#e2e8f0; }}
+  .modal-stage-badge {{
+    display:inline-block; font-size:11px; font-weight:600;
+    padding:3px 10px; border-radius:99px; margin-bottom:16px;
+  }}
+  .modal-grid {{ display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:16px; }}
+  .modal-field label {{ font-size:11px; color:#94a3b8; display:block; margin-bottom:3px; text-transform:uppercase; letter-spacing:0.04em; }}
+  .modal-field span {{ font-size:13px; color:#0f172a; font-weight:500; }}
+  .modal-field a {{ color:#1A4ED8; text-decoration:none; font-size:13px; font-weight:500; }}
+  .modal-sep {{ border:none; border-top:1px solid #f1f5f9; margin:16px 0; }}
+  .modal-label {{ font-size:12px; font-weight:600; color:#0f172a; margin-bottom:8px; }}
+  .stage-select {{
+    width:100%; padding:8px 10px; border:1px solid #e2e8f0; border-radius:7px;
+    font-size:13px; color:#0f172a; background:#f8fafc; outline:none; margin-bottom:12px;
+  }}
+  .stage-select:focus {{ border-color:#1A4ED8; }}
+  .btn-save {{
+    width:100%; padding:9px; background:#1A4ED8; color:#fff;
+    border:none; border-radius:8px; font-size:13px; font-weight:600;
+    cursor:pointer; transition:background 0.15s;
+  }}
+  .btn-save:hover {{ background:#1e40af; }}
+</style>
+</head>
+<body>
 
-        st.markdown("<div class='prop-label'>Fecha creacion</div>", unsafe_allow_html=True)
-        st.markdown(f"<div class='prop-value'>{deal.get('fecha_creacion','—')}</div>", unsafe_allow_html=True)
+<div class="board" id="board"></div>
 
-        st.markdown("<div class='prop-label'>Cierre estimado</div>", unsafe_allow_html=True)
-        st.markdown(f"<div class='prop-value'>{deal.get('fecha_cierre_est','—')}</div>", unsafe_allow_html=True)
+<div class="overlay" id="overlay">
+  <div class="modal" id="modal">
+    <div class="modal-header">
+      <div class="modal-title" id="m-title"></div>
+      <button class="modal-close" onclick="closeModal()">x</button>
+    </div>
+    <div id="m-badge" class="modal-stage-badge"></div>
+    <div class="modal-grid">
+      <div class="modal-field"><label>Empresa</label><span id="m-empresa"></span></div>
+      <div class="modal-field"><label>Vendedor</label><span id="m-vendedor"></span></div>
+      <div class="modal-field"><label>Correo</label><a id="m-correo" href="#"></a></div>
+      <div class="modal-field"><label>Telefono</label><a id="m-tel" href="#"></a></div>
+      <div class="modal-field"><label>Valor</label><span id="m-monto"></span></div>
+      <div class="modal-field"><label>Probabilidad</label><span id="m-prob"></span></div>
+      <div class="modal-field"><label>Fecha creacion</label><span id="m-created"></span></div>
+      <div class="modal-field"><label>Cierre estimado</label><span id="m-close"></span></div>
+    </div>
+    <hr class="modal-sep">
+    <div class="modal-label">Mover a etapa</div>
+    <select class="stage-select" id="m-stage-sel"></select>
+    <button class="btn-save" onclick="saveStage()">Guardar cambio</button>
+  </div>
+</div>
 
-    st.markdown("---")
-    st.markdown("**Mover a otra etapa**")
+<script>
+const STAGES = {stages_json};
+const COLORS = {{
+  "Asignado":              "#888780",
+  "Visitado":              "#1A4ED8",
+  "Interesado":            "#d97706",
+  "Esperando Aprobacion":  "#7c3aed",
+  "Cierre ganado":         "#059669",
+  "Cierre perdido":        "#dc2626",
+}};
 
-    current_idx = STAGES.index(deal["etapa"]) if deal["etapa"] in STAGES else 0
-    nueva_etapa = st.selectbox(
-        "Selecciona etapa",
-        STAGES,
-        index=current_idx,
-        key=f"etapa_sel_{deal['id']}"
-    )
+let deals = {deals_json};
+let draggedId = null;
+let currentDealId = null;
 
-    col_cancel, col_save = st.columns([1, 1])
-    with col_cancel:
-        if st.button("Cancelar", use_container_width=True):
-            st.rerun()
-    with col_save:
-        if st.button("Guardar cambio", type="primary", use_container_width=True):
-            for d in st.session_state.deals:
-                if d["id"] == deal["id"]:
-                    d["etapa"] = nueva_etapa
-                    break
-            st.rerun()
+function fmtUSD(n) {{
+  if (n >= 1000000) return '$' + (n/1000000).toFixed(1) + 'M';
+  if (n >= 1000) return '$' + Math.round(n/1000) + 'K';
+  return '$' + n;
+}}
 
+function probStyle(p, etapa) {{
+  if (etapa === 'Cierre ganado') return 'background:#d1fae5;color:#065f46';
+  if (etapa === 'Cierre perdido') return 'background:#fee2e2;color:#991b1b';
+  if (p >= 70) return 'background:#d1fae5;color:#065f46';
+  if (p >= 40) return 'background:#fef3c7;color:#92400e';
+  return 'background:#fee2e2;color:#991b1b';
+}}
 
-# ── Kanban ────────────────────────────────────────────────────────────
-visible_stages = [s for s in STAGES if s in etapas_sel]
-cols = st.columns(len(visible_stages))
+function buildBoard() {{
+  const board = document.getElementById('board');
+  board.innerHTML = '';
 
-for i, stage in enumerate(visible_stages):
-    stage_df = df[df["etapa"] == stage]
-    color = STAGE_COLORS[stage]
+  STAGES.forEach(stage => {{
+    const stageDeals = deals.filter(d => d.etapa === stage);
+    const color = COLORS[stage] || '#888';
+    const total = stageDeals.reduce((a,d) => a + d.monto, 0);
 
-    with cols[i]:
-        st.markdown(
-            f"""<div style="border-top: 3px solid {color}; padding-top: 10px; margin-bottom: 10px;">
-                <span style="font-weight:600; font-size:13px;">{stage}</span>
-                <span style="background:#f0f0f0; border-radius:99px; padding:1px 8px;
-                             font-size:11px; color:#555; margin-left:6px;">{len(stage_df)}</span>
-            </div>""",
-            unsafe_allow_html=True
-        )
+    const col = document.createElement('div');
+    col.className = 'column';
+    col.dataset.stage = stage;
 
-        if stage_df.empty:
-            st.markdown(
-                "<div style='text-align:center; color:#aaa; font-size:12px; padding:20px 0;'>Sin negocios</div>",
-                unsafe_allow_html=True
-            )
-        else:
-            for _, row in stage_df.iterrows():
-                deal = row.to_dict()
-                prob_css = prob_style(deal["probabilidad"], deal["etapa"])
-                dias_txt = f"{deal['dias_en_etapa']} dias en etapa"
+    col.addEventListener('dragover', e => {{ e.preventDefault(); col.classList.add('drag-over'); }});
+    col.addEventListener('dragleave', () => col.classList.remove('drag-over'));
+    col.addEventListener('drop', e => {{
+      e.preventDefault();
+      col.classList.remove('drag-over');
+      if (draggedId) {{
+        const deal = deals.find(d => d.id === draggedId);
+        if (deal) {{ deal.etapa = stage; buildBoard(); sendUpdate(); }}
+      }}
+    }});
 
-                st.markdown(
-                    f"""<div class="deal-card">
-                        <div class="deal-name">{deal['nombre']}</div>
-                        <div class="deal-company">{deal['empresa']}</div>
-                        <div class="deal-prop">{deal['correo']}</div>
-                        <div class="deal-prop">{deal['telefono']}</div>
-                        <div class="deal-footer">
-                            <span class="deal-amount">{fmt_usd(deal['monto'])}</span>
-                            <span class="deal-prob" style="{prob_css}">{deal['probabilidad']}%</span>
-                        </div>
-                        <div style="font-size:11px; color:#999; margin-top:6px;">{dias_txt}</div>
-                    </div>""",
-                    unsafe_allow_html=True
-                )
+    let cardsHTML = stageDeals.map(d => `
+      <div class="card" draggable="true" data-id="${{d.id}}"
+           ondragstart="onDragStart(event,'${{d.id}}')"
+           ondragend="onDragEnd(event)"
+           onclick="openModal('${{d.id}}')">
+        <div class="card-name">${{d.nombre}}</div>
+        <div class="card-company">${{d.empresa}}</div>
+        <div class="card-prop">${{d.correo}}</div>
+        <div class="card-prop">${{d.telefono}}</div>
+        <div class="card-row">
+          <span class="card-amount">${{fmtUSD(d.monto)}}</span>
+          <span class="card-prob" style="${{probStyle(d.probabilidad, d.etapa)}}">${{d.probabilidad}}%</span>
+        </div>
+      </div>
+    `).join('');
 
-                if st.button(
-                    "Ver detalle",
-                    key=f"btn_{deal['id']}",
-                    use_container_width=True
-                ):
-                    show_deal_modal(deal)
+    col.innerHTML = `
+      <div class="col-header">
+        <span class="col-dot" style="background:${{color}}"></span>
+        <span class="col-title">${{stage}}</span>
+        <span class="col-count">${{stageDeals.length}}</span>
+      </div>
+      <div class="cards-area" data-stage="${{stage}}">${{cardsHTML}}</div>
+      ${{stageDeals.length > 0 ? `<div class="col-total">Total: ${{fmtUSD(total)}}</div>` : ''}}
+    `;
 
-        if not stage_df.empty:
-            st.markdown(
-                f"<div style='text-align:center; font-size:11px; color:#888; "
-                f"border-top:1px solid #eee; padding-top:6px; margin-top:4px;'>"
-                f"Total: <b>{fmt_usd(int(stage_df['monto'].sum()))}</b></div>",
-                unsafe_allow_html=True
-            )
+    board.appendChild(col);
+  }});
+}}
+
+function onDragStart(e, id) {{
+  draggedId = id;
+  setTimeout(() => e.target.classList.add('dragging'), 0);
+}}
+function onDragEnd(e) {{
+  e.target.classList.remove('dragging');
+  draggedId = null;
+}}
+
+function openModal(id) {{
+  const d = deals.find(x => x.id === id);
+  if (!d) return;
+  currentDealId = id;
+  const color = COLORS[d.etapa] || '#888';
+
+  document.getElementById('m-title').textContent = d.nombre;
+  document.getElementById('m-badge').textContent = d.etapa;
+  document.getElementById('m-badge').style = `background:${{color}}22; color:${{color}};`;
+  document.getElementById('m-empresa').textContent = d.empresa;
+  document.getElementById('m-vendedor').textContent = d.vendedor;
+  document.getElementById('m-correo').textContent = d.correo;
+  document.getElementById('m-correo').href = 'mailto:' + d.correo;
+  document.getElementById('m-tel').textContent = d.telefono;
+  document.getElementById('m-tel').href = 'tel:' + d.telefono;
+  document.getElementById('m-monto').textContent = '$' + d.monto.toLocaleString('es-CL') + ' USD';
+  document.getElementById('m-prob').textContent = d.probabilidad + '%';
+  document.getElementById('m-created').textContent = d.fecha_creacion || '—';
+  document.getElementById('m-close').textContent = d.fecha_cierre_est || '—';
+
+  const sel = document.getElementById('m-stage-sel');
+  sel.innerHTML = STAGES.map(s => `<option value="${{s}}" ${{s===d.etapa?'selected':''}}>${{s}}</option>`).join('');
+
+  document.getElementById('overlay').classList.add('open');
+}}
+
+function closeModal() {{
+  document.getElementById('overlay').classList.remove('open');
+  currentDealId = null;
+}}
+
+function saveStage() {{
+  const newStage = document.getElementById('m-stage-sel').value;
+  const deal = deals.find(d => d.id === currentDealId);
+  if (deal) {{ deal.etapa = newStage; buildBoard(); sendUpdate(); }}
+  closeModal();
+}}
+
+function sendUpdate() {{
+  window.parent.postMessage({{type:'streamlit:setComponentValue', value: JSON.stringify(deals)}}, '*');
+}}
+
+document.getElementById('overlay').addEventListener('click', e => {{
+  if (e.target === document.getElementById('overlay')) closeModal();
+}});
+
+buildBoard();
+</script>
+</body>
+</html>
+"""
+
+result = components.html(kanban_html, height=700, scrolling=True)
+
+if result:
+    try:
+        updated = json.loads(result)
+        st.session_state.deals = updated
+    except Exception:
+        pass
