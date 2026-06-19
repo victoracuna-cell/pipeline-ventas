@@ -37,9 +37,12 @@ def check_login():
 
                 if submit:
                     if correo in usuarios and usuarios[correo] == clave:
-                        st.session_state.logged_in = True
-                        st.session_state.usuario = correo
+                        vendedores = st.secrets.get("vendedores", {})
+                        st.session_state.logged_in  = True
+                        st.session_state.usuario    = correo
+                        st.session_state.vendedor   = vendedores.get(correo, correo)
                         st.session_state.login_error = False
+                        st.session_state.deals      = None
                         st.rerun()
                     else:
                         st.session_state.login_error = True
@@ -51,8 +54,7 @@ def check_login():
 
 check_login()
 
-# ── App principal (solo si está autenticado) ──────────────────────────
-
+# ── Constantes ────────────────────────────────────────────────────────
 STAGES = [
     "Asignado",
     "Visitado",
@@ -62,6 +64,7 @@ STAGES = [
     "Cierre perdido",
 ]
 
+# ── Carga de datos ────────────────────────────────────────────────────
 @st.cache_data(ttl=3600)
 def load_deals_from_source(source="mock", webhook_url=""):
     if source == "webhook" and webhook_url:
@@ -79,6 +82,8 @@ if "deals" not in st.session_state:
     st.session_state.deals = None
 
 # ── Sidebar ───────────────────────────────────────────────────────────
+vendedor_activo = st.session_state.get("vendedor", "")
+
 with st.sidebar:
     st.markdown("""
         <div style="padding:8px 0 16px;">
@@ -87,11 +92,17 @@ with st.sidebar:
         </div>
     """, unsafe_allow_html=True)
 
-    st.caption(f"Sesion: {st.session_state.get('usuario','')}")
+    st.markdown(f"""
+        <div style="background:#f0f7ff; border-radius:8px; padding:10px 12px; margin-bottom:12px;">
+            <div style="font-size:11px; color:#64748b; margin-bottom:2px;">Vendedor</div>
+            <div style="font-size:14px; font-weight:600; color:#1A4ED8;">{vendedor_activo}</div>
+            <div style="font-size:11px; color:#94a3b8; margin-top:2px;">{st.session_state.get('usuario','')}</div>
+        </div>
+    """, unsafe_allow_html=True)
+
     if st.button("Cerrar sesion", use_container_width=True):
-        st.session_state.logged_in = False
-        st.session_state.usuario = ""
-        st.session_state.deals = None
+        for key in ["logged_in", "usuario", "vendedor", "deals", "login_error"]:
+            st.session_state.pop(key, None)
         st.rerun()
 
     st.markdown("---")
@@ -107,20 +118,15 @@ with st.sidebar:
     if st.session_state.deals is None:
         st.session_state.deals = load_deals_from_source(source=source_key, webhook_url=webhook_url)
 
-    all_deals = st.session_state.deals
-    vendedores = ["Todos"] + sorted(set(d["vendedor"] for d in all_deals))
-    vendedor_sel = st.selectbox("Vendedor", vendedores)
-
     if st.button("Actualizar datos", use_container_width=True):
         st.cache_data.clear()
         st.session_state.deals = load_deals_from_source(source=source_key, webhook_url=webhook_url)
         st.rerun()
+
     st.caption("Sincronizacion automatica cada hora")
 
-# ── Filtrar ───────────────────────────────────────────────────────────
-deals = st.session_state.deals or []
-if vendedor_sel != "Todos":
-    deals = [d for d in deals if d["vendedor"] == vendedor_sel]
+# ── Filtrar solo negocios del vendedor logueado ───────────────────────
+deals = [d for d in (st.session_state.deals or []) if d["vendedor"] == vendedor_activo]
 
 # ── Metricas ──────────────────────────────────────────────────────────
 ganados = [d for d in deals if d["etapa"] == "Cierre ganado"]
@@ -128,9 +134,10 @@ perdidos = [d for d in deals if d["etapa"] == "Cierre perdido"]
 activos  = [d for d in deals if d["etapa"] not in ("Cierre ganado", "Cierre perdido")]
 valor    = sum(d["monto"] for d in deals if d["etapa"] != "Cierre perdido")
 
-st.markdown("""
+st.markdown(f"""
     <div style="margin-bottom:4px;">
-        <span style="font-size:20px;font-weight:700;color:#0f172a;">Pipeline de Ventas en Terreno</span>
+        <span style="font-size:20px;font-weight:700;color:#0f172a;">Mis negocios</span>
+        <span style="font-size:14px;color:#64748b;margin-left:8px;">{vendedor_activo}</span>
     </div>
 """, unsafe_allow_html=True)
 
@@ -143,7 +150,7 @@ m4.metric("Ganados / Perdidos", f"{len(ganados)} / {len(perdidos)}")
 st.markdown("<div style='margin-bottom:12px'></div>", unsafe_allow_html=True)
 
 # ── Kanban ────────────────────────────────────────────────────────────
-deals_json = json.dumps(deals, ensure_ascii=False)
+deals_json  = json.dumps(deals, ensure_ascii=False)
 stages_json = json.dumps(STAGES, ensure_ascii=False)
 
 kanban_html = f"""
@@ -184,6 +191,7 @@ kanban_html = f"""
   .card-badge {{ font-size:10px; padding:2px 7px; border-radius:99px; font-weight:600; }}
   .card-location {{ font-size:10px; color:#cbd5e1; margin-top:3px; }}
   .col-total {{ font-size:10px; color:#94a3b8; text-align:center; padding:5px 0 8px; border-top:1px solid #f1f5f9; }}
+  .empty-col {{ text-align:center; padding:24px 12px; color:#cbd5e1; font-size:12px; }}
   .overlay {{
     display:none; position:fixed; top:0; left:0; right:0; bottom:0;
     background:rgba(15,23,42,0.5); z-index:1000; align-items:center; justify-content:center;
@@ -265,7 +273,6 @@ kanban_html = f"""
     </div>
     <div class="section-title">Negociacion</div>
     <div class="modal-grid">
-      <div class="mf"><label>Vendedor</label><span id="m-vendedor"></span></div>
       <div class="mf"><label>Valor</label><span id="m-monto"></span></div>
       <div class="mf"><label>Probabilidad</label><span id="m-prob"></span></div>
       <div class="mf"><label>Cierre estimado</label><span id="m-close"></span></div>
@@ -284,34 +291,40 @@ const COLORS = {{
 }};
 let deals = {deals_json};
 let draggedId = null, currentDealId = null;
+
 function fmtUSD(n) {{
   if (n>=1000000) return '$'+(n/1000000).toFixed(1)+'M';
   if (n>=1000) return '$'+Math.round(n/1000)+'K';
   return '$'+n;
 }}
-function probStyle(p,etapa) {{
+function probStyle(p, etapa) {{
   if (etapa==='Cierre ganado') return 'background:#d1fae5;color:#065f46';
   if (etapa==='Cierre perdido') return 'background:#fee2e2;color:#991b1b';
   if (p>=70) return 'background:#d1fae5;color:#065f46';
   if (p>=40) return 'background:#fef3c7;color:#92400e';
   return 'background:#fee2e2;color:#991b1b';
 }}
+
 function buildBoard() {{
   const board = document.getElementById('board');
   board.innerHTML = '';
   STAGES.forEach(stage => {{
-    const sd = deals.filter(d => d.etapa===stage);
-    const color = COLORS[stage]||'#888';
-    const total = sd.reduce((a,d)=>a+d.monto,0);
+    const sd = deals.filter(d => d.etapa === stage);
+    const color = COLORS[stage] || '#888';
+    const total = sd.reduce((a,d) => a + d.monto, 0);
     const col = document.createElement('div');
-    col.className='column'; col.dataset.stage=stage;
-    col.addEventListener('dragover',e=>{{e.preventDefault();col.classList.add('drag-over');}});
-    col.addEventListener('dragleave',()=>col.classList.remove('drag-over'));
-    col.addEventListener('drop',e=>{{
-      e.preventDefault();col.classList.remove('drag-over');
-      if(draggedId){{const deal=deals.find(d=>d.id===draggedId);if(deal){{deal.etapa=stage;buildBoard();sendUpdate();}}}}
+    col.className = 'column';
+    col.dataset.stage = stage;
+    col.addEventListener('dragover', e => {{ e.preventDefault(); col.classList.add('drag-over'); }});
+    col.addEventListener('dragleave', () => col.classList.remove('drag-over'));
+    col.addEventListener('drop', e => {{
+      e.preventDefault(); col.classList.remove('drag-over');
+      if (draggedId) {{
+        const deal = deals.find(d => d.id === draggedId);
+        if (deal) {{ deal.etapa = stage; buildBoard(); sendUpdate(); }}
+      }}
     }});
-    const cards=sd.map(d=>`
+    const cards = sd.map(d => `
       <div class="card" draggable="true" data-id="${{d.id}}"
            ondragstart="onDragStart(event,'${{d.id}}')" ondragend="onDragEnd(event)"
            onclick="openModal('${{d.id}}')">
@@ -322,62 +335,79 @@ function buildBoard() {{
         <div class="card-location">${{d.comuna}}, ${{d.ciudad}}</div>
         <div class="card-row">
           <span class="card-amount">${{fmtUSD(d.monto)}}</span>
-          <span class="card-badge" style="${{probStyle(d.probabilidad,d.etapa)}}">${{d.probabilidad}}%</span>
+          <span class="card-badge" style="${{probStyle(d.probabilidad, d.etapa)}}">${{d.probabilidad}}%</span>
         </div>
       </div>`).join('');
-    col.innerHTML=`
+
+    col.innerHTML = `
       <div class="col-header">
         <span class="col-dot" style="background:${{color}}"></span>
         <span class="col-title">${{stage}}</span>
         <span class="col-count">${{sd.length}}</span>
       </div>
-      <div class="cards-area">${{cards}}</div>
-      ${{sd.length>0?`<div class="col-total">Total: ${{fmtUSD(total)}}</div>`:''}}`;
+      <div class="cards-area">
+        ${{cards || '<div class="empty-col">Sin negocios</div>'}}
+      </div>
+      ${{sd.length > 0 ? `<div class="col-total">Total: ${{fmtUSD(total)}}</div>` : ''}}
+    `;
     board.appendChild(col);
   }});
 }}
-function onDragStart(e,id){{draggedId=id;setTimeout(()=>{{const el=document.querySelector(`[data-id="${{id}}"]`);if(el)el.classList.add('dragging');}},0);}}
-function onDragEnd(e){{e.target.classList.remove('dragging');draggedId=null;}}
-function openModal(id){{
-  const d=deals.find(x=>x.id===id); if(!d) return;
-  currentDealId=id;
-  const color=COLORS[d.etapa]||'#888';
-  document.getElementById('m-title').textContent=d.nombre+' '+d.apellido;
-  document.getElementById('m-negocio').textContent=d.nombre_negocio;
-  document.getElementById('m-badge').textContent=d.etapa;
-  document.getElementById('m-badge').style.cssText=`background:${{color}}22;color:${{color}};`;
-  document.getElementById('m-nombre').textContent=d.nombre;
-  document.getElementById('m-apellido').textContent=d.apellido;
-  document.getElementById('m-correo').textContent=d.correo;
-  document.getElementById('m-correo').href='mailto:'+d.correo;
-  document.getElementById('m-tel').textContent=d.telefono;
-  document.getElementById('m-tel').href='tel:'+d.telefono;
-  document.getElementById('m-negnombre').textContent=d.nombre_negocio;
-  document.getElementById('m-desc').textContent=d.descripcion_negocio||'—';
-  document.getElementById('m-nivel').innerHTML=`<span class="nivel-badge nivel-${{d.nivel_venta}}">${{d.nivel_venta}}</span>`;
-  document.getElementById('m-resultado').textContent=d.resultado_visita||'—';
-  document.getElementById('m-dir').textContent=(d.calle||'')+' '+(d.numero||'');
-  document.getElementById('m-ciudad').textContent=d.ciudad||'—';
-  document.getElementById('m-comuna').textContent=d.comuna||'—';
-  document.getElementById('m-region').textContent=d.region||'—';
-  document.getElementById('m-vendedor').textContent=d.vendedor;
-  document.getElementById('m-monto').textContent='$'+(d.monto||0).toLocaleString('es-CL')+' USD';
-  document.getElementById('m-prob').textContent=d.probabilidad+'%';
-  document.getElementById('m-close').textContent=d.fecha_cierre_est||'—';
-  document.getElementById('m-created').textContent=d.fecha_creacion||'—';
-  const sel=document.getElementById('m-stage-sel');
-  sel.innerHTML=STAGES.map(s=>`<option value="${{s}}" ${{s===d.etapa?'selected':''}}>${{s}}</option>`).join('');
+
+function onDragStart(e, id) {{
+  draggedId = id;
+  setTimeout(() => {{ const el = document.querySelector(`[data-id="${{id}}"]`); if(el) el.classList.add('dragging'); }}, 0);
+}}
+function onDragEnd(e) {{ e.target.classList.remove('dragging'); draggedId = null; }}
+
+function openModal(id) {{
+  const d = deals.find(x => x.id === id); if (!d) return;
+  currentDealId = id;
+  const color = COLORS[d.etapa] || '#888';
+  document.getElementById('m-title').textContent = d.nombre + ' ' + d.apellido;
+  document.getElementById('m-negocio').textContent = d.nombre_negocio;
+  document.getElementById('m-badge').textContent = d.etapa;
+  document.getElementById('m-badge').style.cssText = `background:${{color}}22;color:${{color}};`;
+  document.getElementById('m-nombre').textContent = d.nombre;
+  document.getElementById('m-apellido').textContent = d.apellido;
+  document.getElementById('m-correo').textContent = d.correo;
+  document.getElementById('m-correo').href = 'mailto:' + d.correo;
+  document.getElementById('m-tel').textContent = d.telefono;
+  document.getElementById('m-tel').href = 'tel:' + d.telefono;
+  document.getElementById('m-negnombre').textContent = d.nombre_negocio;
+  document.getElementById('m-desc').textContent = d.descripcion_negocio || '—';
+  document.getElementById('m-nivel').innerHTML = `<span class="nivel-badge nivel-${{d.nivel_venta}}">${{d.nivel_venta}}</span>`;
+  document.getElementById('m-resultado').textContent = d.resultado_visita || '—';
+  document.getElementById('m-dir').textContent = (d.calle||'') + ' ' + (d.numero||'');
+  document.getElementById('m-ciudad').textContent = d.ciudad || '—';
+  document.getElementById('m-comuna').textContent = d.comuna || '—';
+  document.getElementById('m-region').textContent = d.region || '—';
+  document.getElementById('m-monto').textContent = '$' + (d.monto||0).toLocaleString('es-CL') + ' USD';
+  document.getElementById('m-prob').textContent = d.probabilidad + '%';
+  document.getElementById('m-close').textContent = d.fecha_cierre_est || '—';
+  document.getElementById('m-created').textContent = d.fecha_creacion || '—';
+  const sel = document.getElementById('m-stage-sel');
+  sel.innerHTML = STAGES.map(s => `<option value="${{s}}" ${{s===d.etapa?'selected':''}}>${{s}}</option>`).join('');
   document.getElementById('overlay').classList.add('open');
 }}
-function closeModal(){{document.getElementById('overlay').classList.remove('open');currentDealId=null;}}
-function saveStage(){{
-  const ns=document.getElementById('m-stage-sel').value;
-  const deal=deals.find(d=>d.id===currentDealId);
-  if(deal){{deal.etapa=ns;buildBoard();sendUpdate();}}
+
+function closeModal() {{ document.getElementById('overlay').classList.remove('open'); currentDealId = null; }}
+
+function saveStage() {{
+  const ns = document.getElementById('m-stage-sel').value;
+  const deal = deals.find(d => d.id === currentDealId);
+  if (deal) {{ deal.etapa = ns; buildBoard(); sendUpdate(); }}
   closeModal();
 }}
-function sendUpdate(){{window.parent.postMessage({{type:'streamlit:setComponentValue',value:JSON.stringify(deals)}},'*');}}
-document.getElementById('overlay').addEventListener('click',e=>{{if(e.target.id==='overlay')closeModal();}});
+
+function sendUpdate() {{
+  window.parent.postMessage({{type:'streamlit:setComponentValue', value: JSON.stringify(deals)}}, '*');
+}}
+
+document.getElementById('overlay').addEventListener('click', e => {{
+  if (e.target.id === 'overlay') closeModal();
+}});
+
 buildBoard();
 </script>
 </body>
@@ -388,6 +418,11 @@ result = components.html(kanban_html, height=720, scrolling=True)
 if result:
     try:
         updated = json.loads(result)
-        st.session_state.deals = updated
+        # Actualizar solo los deals del vendedor activo en el estado global
+        all_deals = st.session_state.deals or []
+        updated_ids = {{d["id"]: d for d in updated}}
+        st.session_state.deals = [
+            updated_ids.get(d["id"], d) for d in all_deals
+        ]
     except Exception:
         pass
