@@ -636,7 +636,11 @@ function buildBoard(){{
     if(CAN_MOVE){{
       ca.addEventListener('dragover',e=>{{e.preventDefault();ca.classList.add('over');}});
       ca.addEventListener('dragleave',()=>ca.classList.remove('over'));
-      ca.addEventListener('drop',e=>{{e.preventDefault();ca.classList.remove('over');if(dragId){{send({{type:'move_deal',id:dragId,etapa:stage}});dragId=null;}}}});
+      ca.addEventListener('drop',e=>{{e.preventDefault();ca.classList.remove('over');if(dragId){{
+        const deal=deals.find(d=>d.id===dragId);
+        if(deal){{deal.etapa=stage;filterDeals();}}
+        send({{type:'move_deal',id:dragId,etapa:stage}});dragId=null;
+      }}}});
     }}
     sd.forEach(d=>{{
       const card=document.createElement('div');card.className='card';
@@ -863,8 +867,16 @@ function createDeal(){{
     etapa:'Asignado',vendedor:VENDOR,
     fecha_creacion:new Date().toISOString().split('T')[0]
   }};
-  send({{type:'create_deal',deal:nd}});closeNew();
+  // Agregar localmente para que aparezca de inmediato
+  deals.push(nd);
+  filtered=[...deals];
+  render();
+  closeNew();
+  // Luego guardar en Supabase
+  send({{type:'create_deal',deal:nd}});
   ['n-nombre','n-apellido','n-correo','n-tel','n-negnombre','n-ciudad','n-comuna','n-region'].forEach(id=>document.getElementById(id).value='');
+  document.getElementById('n-monto').value='';
+  document.getElementById('n-prob').value='50';
 }}
 
 function refresh(){{send({{type:'refresh'}});}}
